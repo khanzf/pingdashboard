@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+
+from twisted.internet import reactor, protocol, endpoints, defer
+from twisted.internet.protocol import ProcessProtocol
+
+import sqlite3
+
+class pingCommand(ProcessProtocol):
+   def __init__(self, host, conn, cursor):
+      self.host = host
+      self.conn = conn 
+      self.cursor = cursor
+   def processEnded(self, status):
+      if status.value.exitCode == 0:
+         print(self.host, "is Up!")
+      else:
+         print(self.host, "is Down!")
+      sql = "UPDATE log SET status=? WHERE host=?"
+      self.cursor.execute(sql, (status.value.exitCode, self.host))
+      self.conn.commit()
+         
+
+class pingLoop(object):
+   def __init__(self, host, conn):
+      self.host = host
+      self.conn = conn 
+      self.cursor = conn.cursor()
+
+      self.cursor.execute("SELECT status FROM log WHERE host=?", (self.host,))
+      if self.cursor.fetchone() is None:
+         self.cursor.execute("INSERT INTO log VALUES (?, ?)", (self.host, 0))
+         self.conn.commit()
+
+      reactor.callLater(2, self.loop)
+
+   def loop(self):
+      x = pingCommand(self.host, self.conn, self.cursor)
+      x.deferred = defer.Deferred()
+      cmd = ["ping", "-c", "1", self.host]
+      p = reactor.spawnProcess(x, cmd[0], cmd)
+
+      reactor.callLater(2, self.loop)
+
+def main():
+   conn = sqlite3.connect('log.db')
+   cursor = conn.cursor()
+
+   try:
+      cursor.execute('CREATE TABLE log (host text, status integer)')
+      conn.commit()
+   except sqlite3.OperationalError:
+      pass
+
+   with open('targets.txt') as f:
+      for line in f:
+         pingLoop(line.strip(), conn)
+
+   reactor.run()
+
+if __name__ == "__main__":
+   main()
